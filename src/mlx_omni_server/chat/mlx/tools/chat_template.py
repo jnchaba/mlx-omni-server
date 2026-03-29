@@ -91,6 +91,8 @@ class ChatTemplate(ABC):
         for message in messages:
             # messages are already in dict format
             msg_dict = message.copy()  # Make a copy to avoid modifying original
+            if msg_dict.get("content") is None:
+                msg_dict["content"] = ""
             if isinstance(msg_dict.get("content"), list):
                 msg_dict["content"] = "\n\n".join(
                     item["text"] for item in msg_dict["content"] if item.get("type") == "text"
