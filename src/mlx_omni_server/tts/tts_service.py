@@ -32,6 +32,8 @@ class TTSModelAdapter(BaseModel):
     def from_path_or_hf_repo(cls, path_or_hf_repo: str) -> "TTSModelAdapter":
         if path_or_hf_repo == "lucasnewman/f5-tts-mlx":
             return F5Model(path_or_hf_repo=path_or_hf_repo)
+        elif "Qwen3-TTS" in path_or_hf_repo:
+            return Qwen3TTSModel(path_or_hf_repo=path_or_hf_repo)
         else:
             return MlxAudioModel(path_or_hf_repo=path_or_hf_repo)
 
@@ -76,6 +78,39 @@ class MlxAudioModel(TTSModelAdapter):
             **extra_params,
         )
 
+        return Path(output_path).exists()
+
+
+class Qwen3TTSModel(TTSModelAdapter):
+    """Adapter for Qwen3-TTS models (VoiceDesign and CustomVoice)."""
+
+    @override
+    def generate_audio(self, request: TTSRequest, output_path: str | Path) -> bool:
+        import numpy as np
+        import soundfile as sf
+        from mlx_audio.tts.utils import load_model
+
+        model = load_model(model_path=request.model)
+        voice = request.voice if hasattr(request, "voice") and request.voice else ""
+
+        if "VoiceDesign" in request.model:
+            results = list(model.generate_voice_design(
+                text=request.input,
+                instruct=voice or "clear, natural voice",
+            ))
+        else:
+            ref_audio = voice if voice and Path(voice).exists() else None
+            results = list(model.generate(
+                text=request.input,
+                ref_audio=ref_audio,
+            ))
+
+        if not results:
+            return False
+
+        audio_list = [np.array(r.audio) for r in results]
+        audio = np.concatenate(audio_list, axis=0) if len(audio_list) > 1 else audio_list[0]
+        sf.write(str(output_path), audio, model.sample_rate)
         return Path(output_path).exists()
 
 
