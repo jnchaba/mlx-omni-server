@@ -93,16 +93,30 @@ class Qwen3TTSModel(TTSModelAdapter):
         model = load_model(model_path=request.model)
         voice = request.voice if hasattr(request, "voice") and request.voice else ""
 
+        extra = request.get_extra_params() or {}
+        temperature = extra.get("temperature", 0.4)
+        top_k = extra.get("top_k", 20)
+        top_p = extra.get("top_p", 0.85)
+        repetition_penalty = extra.get("repetition_penalty", 1.1)
+
         if "VoiceDesign" in request.model:
             results = list(model.generate_voice_design(
                 text=request.input,
                 instruct=voice or "clear, natural voice",
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                repetition_penalty=repetition_penalty,
             ))
         else:
             ref_audio = voice if voice and Path(voice).exists() else None
             results = list(model.generate(
                 text=request.input,
                 ref_audio=ref_audio,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                repetition_penalty=repetition_penalty,
             ))
 
         if not results:
