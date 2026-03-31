@@ -1,4 +1,6 @@
+from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from f5_tts_mlx.generate import generate
 from mlx_audio.tts.generate import generate_audio
@@ -6,6 +8,17 @@ from pydantic import BaseModel, Field  # , PrivateAttr
 from typing_extensions import override
 
 from .schema import TTSRequest
+
+
+@lru_cache(maxsize=8)
+def _load_ref_audio(ref_audio_path: str, sample_rate: int):
+    """Load and cache reference audio for voice cloning.
+
+    Cached by file path to avoid re-reading and resampling on repeated requests.
+    """
+    from mlx_audio.tts.generate import load_audio
+
+    return load_audio(ref_audio_path, sample_rate=sample_rate)
 
 
 class TTSModelAdapter(BaseModel):
@@ -82,7 +95,7 @@ class MlxAudioModel(TTSModelAdapter):
 
 
 class Qwen3TTSModel(TTSModelAdapter):
-    """Adapter for Qwen3-TTS models (VoiceDesign and CustomVoice)."""
+    """Adapter for Qwen3-TTS models (VoiceDesign, CustomVoice, and Base/clone)."""
 
     @override
     def generate_audio(self, request: TTSRequest, output_path: str | Path) -> bool:
@@ -94,29 +107,44 @@ class Qwen3TTSModel(TTSModelAdapter):
         voice = request.voice if hasattr(request, "voice") and request.voice else ""
 
         extra = request.get_extra_params() or {}
-        temperature = extra.get("temperature", 0.4)
-        top_k = extra.get("top_k", 20)
-        top_p = extra.get("top_p", 0.85)
+        # Support nested extra_params dict (client may send {"extra_params": {...}})
+        if "extra_params" in extra and isinstance(extra["extra_params"], dict):
+            extra = extra["extra_params"]
+        ref_audio_path = extra.pop("ref_audio", None)
+        ref_text = extra.pop("ref_text", None)
+
+        temperature = extra.get("temperature", 0.8)
+        top_k = extra.get("top_k", 50)
+        top_p = extra.get("top_p", 0.9)
         repetition_penalty = extra.get("repetition_penalty", 1.1)
+        max_tokens = extra.get("max_tokens")
+
+        gen_kwargs = dict(
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+        )
+        if max_tokens is not None:
+            gen_kwargs["max_tokens"] = max_tokens
 
         if "VoiceDesign" in request.model:
             results = list(model.generate_voice_design(
                 text=request.input,
                 instruct=voice or "clear, natural voice",
-                temperature=temperature,
-                top_k=top_k,
-                top_p=top_p,
-                repetition_penalty=repetition_penalty,
+                **gen_kwargs,
             ))
+        elif "Base" in request.model and ref_audio_path:
+            results = self._generate_clone(
+                model, request.input, voice, ref_audio_path, ref_text, gen_kwargs,
+            )
         else:
             ref_audio = voice if voice and Path(voice).exists() else None
             results = list(model.generate(
                 text=request.input,
                 ref_audio=ref_audio,
-                temperature=temperature,
-                top_k=top_k,
-                top_p=top_p,
-                repetition_penalty=repetition_penalty,
+                lang_code=voice or "auto",
+                **gen_kwargs,
             ))
 
         if not results:
@@ -126,6 +154,31 @@ class Qwen3TTSModel(TTSModelAdapter):
         audio = np.concatenate(audio_list, axis=0) if len(audio_list) > 1 else audio_list[0]
         sf.write(str(output_path), audio, model.sample_rate)
         return Path(output_path).exists()
+
+    @staticmethod
+    def _generate_clone(
+        model: Any,
+        text: str,
+        language: str,
+        ref_audio_path: str,
+        ref_text: str | None,
+        gen_kwargs: dict,
+    ) -> list:
+        ref_path = Path(ref_audio_path)
+        if not ref_path.exists():
+            raise FileNotFoundError(
+                f"Reference audio file not found: {ref_audio_path}"
+            )
+
+        ref_audio = _load_ref_audio(str(ref_path.resolve()), model.sample_rate)
+
+        return list(model.generate(
+            text=text,
+            ref_audio=ref_audio,
+            ref_text=ref_text,
+            lang_code=language or "auto",
+            **gen_kwargs,
+        ))
 
 
 class TTSService:
