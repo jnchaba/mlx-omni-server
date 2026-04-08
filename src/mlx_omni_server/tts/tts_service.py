@@ -52,7 +52,6 @@ class TTSModelAdapter(BaseModel):
 
 
 class F5Model(TTSModelAdapter):
-
     @override
     def generate_audio(self, request: TTSRequest, output_path: str | Path) -> bool:
         self.path_or_hf_repo = request.model
@@ -113,10 +112,10 @@ class Qwen3TTSModel(TTSModelAdapter):
         ref_audio_path = extra.pop("ref_audio", None)
         ref_text = extra.pop("ref_text", None)
 
-        temperature = extra.get("temperature", 0.8)
+        temperature = extra.get("temperature", 0.9)
         top_k = extra.get("top_k", 50)
-        top_p = extra.get("top_p", 0.9)
-        repetition_penalty = extra.get("repetition_penalty", 1.1)
+        top_p = extra.get("top_p", 1.0)
+        repetition_penalty = extra.get("repetition_penalty", 1.05)
         max_tokens = extra.get("max_tokens")
 
         gen_kwargs = dict(
@@ -129,29 +128,40 @@ class Qwen3TTSModel(TTSModelAdapter):
             gen_kwargs["max_tokens"] = max_tokens
 
         if "VoiceDesign" in request.model:
-            results = list(model.generate_voice_design(
-                text=request.input,
-                instruct=voice or "clear, natural voice",
-                **gen_kwargs,
-            ))
+            results = list(
+                model.generate_voice_design(
+                    text=request.input,
+                    instruct=voice or "clear, natural voice",
+                    **gen_kwargs,
+                )
+            )
         elif "Base" in request.model and ref_audio_path:
             results = self._generate_clone(
-                model, request.input, voice, ref_audio_path, ref_text, gen_kwargs,
+                model,
+                request.input,
+                voice,
+                ref_audio_path,
+                ref_text,
+                gen_kwargs,
             )
         else:
             ref_audio = voice if voice and Path(voice).exists() else None
-            results = list(model.generate(
-                text=request.input,
-                ref_audio=ref_audio,
-                lang_code=voice or "auto",
-                **gen_kwargs,
-            ))
+            results = list(
+                model.generate(
+                    text=request.input,
+                    ref_audio=ref_audio,
+                    lang_code=voice or "auto",
+                    **gen_kwargs,
+                )
+            )
 
         if not results:
             return False
 
         audio_list = [np.array(r.audio) for r in results]
-        audio = np.concatenate(audio_list, axis=0) if len(audio_list) > 1 else audio_list[0]
+        audio = (
+            np.concatenate(audio_list, axis=0) if len(audio_list) > 1 else audio_list[0]
+        )
         sf.write(str(output_path), audio, model.sample_rate)
         return Path(output_path).exists()
 
@@ -166,19 +176,19 @@ class Qwen3TTSModel(TTSModelAdapter):
     ) -> list:
         ref_path = Path(ref_audio_path)
         if not ref_path.exists():
-            raise FileNotFoundError(
-                f"Reference audio file not found: {ref_audio_path}"
-            )
+            raise FileNotFoundError(f"Reference audio file not found: {ref_audio_path}")
 
         ref_audio = _load_ref_audio(str(ref_path.resolve()), model.sample_rate)
 
-        return list(model.generate(
-            text=text,
-            ref_audio=ref_audio,
-            ref_text=ref_text,
-            lang_code=language or "auto",
-            **gen_kwargs,
-        ))
+        return list(
+            model.generate(
+                text=text,
+                ref_audio=ref_audio,
+                ref_text=ref_text,
+                lang_code=language or "auto",
+                **gen_kwargs,
+            )
+        )
 
 
 class TTSService:
