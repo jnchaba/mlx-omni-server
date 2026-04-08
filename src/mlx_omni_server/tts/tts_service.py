@@ -174,11 +174,24 @@ class Qwen3TTSModel(TTSModelAdapter):
         ref_text: str | None,
         gen_kwargs: dict,
     ) -> list:
-        ref_path = Path(ref_audio_path)
-        if not ref_path.exists():
-            raise FileNotFoundError(f"Reference audio file not found: {ref_audio_path}")
+        import tempfile
+        import urllib.request
 
-        ref_audio = _load_ref_audio(str(ref_path.resolve()), model.sample_rate)
+        # Support URLs: download to temp file before loading
+        if ref_audio_path.startswith(("http://", "https://")):
+            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            try:
+                urllib.request.urlretrieve(ref_audio_path, tmp.name)
+                resolved_path = tmp.name
+            except Exception as e:
+                Path(tmp.name).unlink(missing_ok=True)
+                raise FileNotFoundError(f"Failed to download reference audio: {e}")
+        else:
+            resolved_path = str(Path(ref_audio_path).resolve())
+            if not Path(resolved_path).exists():
+                raise FileNotFoundError(f"Reference audio file not found: {ref_audio_path}")
+
+        ref_audio = _load_ref_audio(resolved_path, model.sample_rate)
 
         return list(
             model.generate(
